@@ -115,6 +115,36 @@ func handleUIView(_ params: CallTool.Parameters) async throws -> CallTool.Result
     ])
 }
 
+func handleSnapPoints(_ params: CallTool.Parameters) async throws -> CallTool.Result {
+    let udid = try await SimulatorCache.shared.resolveDeviceID(params.arguments?["udid"]?.stringValue)
+    let screenScale = try await SimulatorCache.shared.getScreenScale(udid: udid)
+    let outputPath = params.arguments?["output_path"]?.stringValue.map { ensureAbsolutePath($0) }
+    let format = params.arguments?["type"]?.stringValue ?? "png"
+    let result = try ScreenCapture.captureSnapPoints(udid: udid, screenScale: screenScale, outputPath: outputPath, format: format)
+    return snapResultToCallToolResult(result)
+}
+
+func handleSnapPixels(_ params: CallTool.Parameters) async throws -> CallTool.Result {
+    let udid = try await SimulatorCache.shared.resolveDeviceID(params.arguments?["udid"]?.stringValue)
+    let outputPath = params.arguments?["output_path"]?.stringValue.map { ensureAbsolutePath($0) }
+    let format = params.arguments?["type"]?.stringValue ?? "png"
+    let result = try ScreenCapture.captureSnapPixels(udid: udid, outputPath: outputPath, format: format)
+    return snapResultToCallToolResult(result)
+}
+
+private func snapResultToCallToolResult(_ result: ScreenCapture.SnapResult) -> CallTool.Result {
+    if let base64 = result.base64 {
+        return .init(content: [
+            .image(data: base64, mimeType: "image/jpeg", metadata: nil),
+            .text("Screenshot captured (\(result.width)x\(result.height))"),
+        ])
+    }
+    if let path = result.path {
+        return .init(content: [.text("Screenshot saved to \(path) (\(result.width)x\(result.height))")])
+    }
+    return .init(content: [.text("Screenshot produced no output")], isError: true)
+}
+
 func handleInstallApp(_ params: CallTool.Parameters) async throws -> CallTool.Result {
     let udid = try await SimulatorCache.shared.resolveDeviceID(params.arguments?["udid"]?.stringValue)
 

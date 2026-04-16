@@ -101,6 +101,52 @@ func allTools() -> [Tool] {
         ))
     }
 
+    if !isFiltered("snap_points") {
+        tools.append(Tool(
+            name: "snap_points",
+            description: "Screenshot via simulator framebuffer at iOS point dimensions (1 px = 1 point, coordinate-aligned with tap/describe). Works when Simulator.app is hidden.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "output_path": .object([
+                        "type": .string("string"),
+                        "maxLength": .int(1024),
+                        "description": .string("Optional file path to save screenshot to. If provided, saves to file instead of returning base64 image data."),
+                    ]),
+                    "type": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("png"), .string("tiff"), .string("bmp"), .string("gif"), .string("jpeg")]),
+                        "description": .string("Image format when saving to file. Default is png."),
+                    ]),
+                    "udid": udidSchema,
+                ]),
+            ])
+        ))
+    }
+
+    if !isFiltered("snap_pixels") {
+        tools.append(Tool(
+            name: "snap_pixels",
+            description: "Screenshot via simulator framebuffer at native device pixel dimensions (no downscale). Works when Simulator.app is hidden. Not coordinate-aligned with tap/describe — use snap_points for that.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "output_path": .object([
+                        "type": .string("string"),
+                        "maxLength": .int(1024),
+                        "description": .string("Optional file path to save screenshot to. If provided, saves to file instead of returning base64 image data."),
+                    ]),
+                    "type": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("png"), .string("tiff"), .string("bmp"), .string("gif"), .string("jpeg")]),
+                        "description": .string("Image format when saving to file. Default is png."),
+                    ]),
+                    "udid": udidSchema,
+                ]),
+            ])
+        ))
+    }
+
     if !isFiltered("install_app") {
         tools.append(Tool(
             name: "install_app",
@@ -282,6 +328,10 @@ func handleToolCall(_ params: CallTool.Parameters) async -> CallTool.Result {
             return try await handleUISwipe(params)
         case "view":
             return try await handleUIView(params)
+        case "snap_points":
+            return try await handleSnapPoints(params)
+        case "snap_pixels":
+            return try await handleSnapPixels(params)
         case "install_app":
             return try await handleInstallApp(params)
         case "launch_app":

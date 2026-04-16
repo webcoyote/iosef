@@ -266,6 +266,8 @@ struct SimulatorCLI: AsyncParsableCommand {
             CommandGroup(name: "Inspection:", subcommands: [
                 Describe.self,
                 UIView.self,
+                SnapPoints.self,
+                SnapPixels.self,
             ]),
             CommandGroup(name: "Interaction:", subcommands: [
                 Tap.self,
@@ -868,6 +870,92 @@ struct UIView: AsyncParsableCommand {
         if let type { args["type"] = .string(type) }
         common.addDevice(to: &args)
         try await runToolCLI(toolName: "view", arguments: args, json: common.json, output: output, verbose: common.verbose, common: common)
+    }
+}
+
+struct SnapPoints: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "snap-points",
+        abstract: "Screenshot via simulator framebuffer at iOS point dimensions.",
+        discussion: """
+            Captures the simulator framebuffer directly (bypassing the macOS Window \
+            Server) and downscales to iOS point dimensions so that 1 output pixel = \
+            1 iOS point, coordinate-aligned with `tap` and `describe`.
+
+            Works even when the Simulator.app window is hidden, minimized, or behind \
+            other windows — useful for CI and background agents.
+
+            In CLI mode, saves the screenshot to a file and prints the path. Use \
+            --output to specify a path, otherwise a temp file is created.
+
+            In MCP mode, returns base64 image data unless output_path is provided.
+
+            Examples:
+              iosef snap-points
+              iosef snap-points --output /tmp/screen.png
+              iosef snap-points --output /tmp/screen.jpg --type jpeg
+            """
+    )
+
+    @OptionGroup var common: CommonOptions
+
+    @Option(name: .long, help: "Save screenshot to this file path")
+    var output: String?
+
+    @Option(name: .long, help: "Image format: png, tiff, bmp, gif, jpeg (default: png)")
+    var type: String?
+
+    func run() async throws {
+        var args: [String: Value] = [:]
+        if let output { args["output_path"] = .string(output) }
+        if let type { args["type"] = .string(type) }
+        common.addDevice(to: &args)
+        try await runToolCLI(toolName: "snap_points", arguments: args, json: common.json, output: output, verbose: common.verbose, common: common)
+    }
+}
+
+struct SnapPixels: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "snap-pixels",
+        abstract: "Screenshot via simulator framebuffer at native device pixel dimensions.",
+        discussion: """
+            Captures the simulator framebuffer directly (bypassing the macOS Window \
+            Server) at native device pixel resolution (no downscale). Best for OCR, \
+            visual diffing, or anywhere you need full-fidelity pixels.
+
+            Works even when the Simulator.app window is hidden, minimized, or behind \
+            other windows — useful for CI and background agents.
+
+            Note: coordinates from `tap` / `describe` are in iOS points, not pixels, \
+            so snap-pixels output is NOT coordinate-aligned with those commands. \
+            Use `snap-points` for coordinate-aligned screenshots.
+
+            In CLI mode, saves the screenshot to a file and prints the path. Use \
+            --output to specify a path, otherwise a temp file is created.
+
+            In MCP mode, returns base64 image data unless output_path is provided.
+
+            Examples:
+              iosef snap-pixels
+              iosef snap-pixels --output /tmp/screen.png
+              iosef snap-pixels --output /tmp/screen.tiff --type tiff
+            """
+    )
+
+    @OptionGroup var common: CommonOptions
+
+    @Option(name: .long, help: "Save screenshot to this file path")
+    var output: String?
+
+    @Option(name: .long, help: "Image format: png, tiff, bmp, gif, jpeg (default: png)")
+    var type: String?
+
+    func run() async throws {
+        var args: [String: Value] = [:]
+        if let output { args["output_path"] = .string(output) }
+        if let type { args["type"] = .string(type) }
+        common.addDevice(to: &args)
+        try await runToolCLI(toolName: "snap_pixels", arguments: args, json: common.json, output: output, verbose: common.verbose, common: common)
     }
 }
 

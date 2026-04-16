@@ -61,8 +61,19 @@ Use `iosef view` for screenshots (not `simctl` or `idb` — iosef aligns coordin
 
 ```bash
 iosef view                            # Screenshot to temp file (prints path)
-iosef view --output /tmp/screen.png   # Screenshot to specific path
+iosef view --output /tmp/screen.png   # Screenshot to specific path (via macOS window)
 ```
+
+For screenshots that work when Simulator.app is hidden, minimized, or behind other windows (useful on CI or when running background agents), use the framebuffer-based commands:
+
+```bash
+iosef snap-points                     # 1 px = 1 iOS point, coordinate-aligned with tap/describe
+iosef snap-points --output /tmp/s.png # Same, written to a specific path in any supported format
+iosef snap-pixels                     # Native device pixels (e.g. Retina 3x), for OCR / visual diff
+iosef snap-pixels --output /tmp/s.png
+```
+
+`snap-points` is the right default for agentic workflows (coordinates from `describe` map directly to `snap-points` pixels). Prefer `snap-pixels` only when you need full device-pixel resolution.
 
 ### Interact: tap, type, swipe
 
@@ -224,7 +235,9 @@ Then the AX tree shows: `AXImage "Reorder" (374±12, 221±7)` — use center (37
 | `describe` | Full AX tree |
 | `describe --depth N` | Limit tree depth |
 | `describe --x X --y Y` | Element at coordinate |
-| `view --output path.png` | Coordinate-aligned screenshot |
+| `view --output path.png` | Screenshot via macOS window (requires visible Simulator) |
+| `snap-points [--output path]` | Coordinate-aligned screenshot (framebuffer, works when hidden) |
+| `snap-pixels [--output path]` | Native device-pixel screenshot (framebuffer, works when hidden) |
 
 **Interact**
 
