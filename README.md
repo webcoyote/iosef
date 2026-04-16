@@ -67,9 +67,15 @@ iosef describe --x 200 --y 400           # What's at this coordinate?
 iosef describe --x 200 --y 400 --json | jq '.content[0].text'
 
 iosef view                                # Screenshot to temp file (prints path)
-iosef view --output /tmp/screen.png       # Screenshot to specific file
+iosef view --output /tmp/screen.png       # Screenshot to specific file (via macOS window)
 iosef view --output /tmp/screen.jpg --type jpeg
+
+iosef snap-points                         # Coordinate-aligned screenshot via framebuffer
+iosef snap-points --output /tmp/s.png     # Works when Simulator.app is hidden
+iosef snap-pixels --output /tmp/s.png     # Native device pixels (no downscale)
 ```
+
+`view` captures the macOS Simulator window (requires it to be visible, mirrors what a user would see). `snap-points` and `snap-pixels` read the simulator's framebuffer directly, so they work when Simulator.app is hidden, minimized, or behind other windows — useful for CI and background agents. `snap-points` is coordinate-aligned with `tap` / `describe` (1 px = 1 iOS point); `snap-pixels` preserves the native device resolution for OCR or visual diffing.
 
 ### Interact
 
@@ -256,7 +262,9 @@ State is stored in `~/.iosef/state.json` (global) or `./.iosef/state.json` (loca
 | `install_app` | `--app-path <path>` | Install .app or .ipa bundle |
 | `launch_app` | `--bundle-id <id> [--terminate-running]` | Launch app by bundle identifier |
 | `describe` | `[--depth N] [--x X --y Y]` | Describe accessibility tree or element at point |
-| `view` | `[--output <path>] [--type png\|jpeg\|tiff\|bmp\|gif]` | Capture screenshot |
+| `view` | `[--output <path>] [--type png\|jpeg\|tiff\|bmp\|gif]` | Capture screenshot via macOS window (requires visible Simulator) |
+| `snap-points` | `[--output <path>] [--type …]` | Framebuffer screenshot, 1 px = 1 iOS point (works when Simulator hidden) |
+| `snap-pixels` | `[--output <path>] [--type …]` | Framebuffer screenshot at native device pixels (works when Simulator hidden) |
 | `tap` | `[--role R] [--name N] [--identifier I] [--x X --y Y] [--duration S]` | Tap by selector or at coordinates |
 | `type` | `--text <text> [--role R] [--name N] [--identifier I]` | Type text; with selectors: find + tap + type |
 | `swipe` | `--x-start X --y-start Y --x-end X --y-end Y [--delta N] [--duration S]` | Swipe between two points |

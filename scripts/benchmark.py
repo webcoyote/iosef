@@ -29,6 +29,8 @@ TOOLS: list[tuple[str, str, dict | None]] = [
     ("describe_xy", "describe", {"x": 165, "y": 269}),
     ("tap", "tap", {"x": 165, "y": 269}),
     ("view", "view", None),
+    ("snap_points", "snap_points", None),
+    ("snap_pixels", "snap_pixels", None),
 ]
 
 # CLI-level benchmark tools: (display_name, swift_cli_template, baseline_template, baseline_label)
@@ -55,6 +57,18 @@ CLI_TOOLS: list[tuple[str, str, str, str]] = [
     (
         "screenshot",
         "{swift_bin} view --udid {udid}",
+        "xcrun simctl io {udid} screenshot --type=png /tmp/bench_ss.png",
+        "simctl",
+    ),
+    (
+        "snap_points",
+        "{swift_bin} snap-points --udid {udid} --output /tmp/bench_snap_points.png",
+        "xcrun simctl io {udid} screenshot --type=png /tmp/bench_ss.png",
+        "simctl",
+    ),
+    (
+        "snap_pixels",
+        "{swift_bin} snap-pixels --udid {udid} --output /tmp/bench_snap_pixels.png",
         "xcrun simctl io {udid} screenshot --type=png /tmp/bench_ss.png",
         "simctl",
     ),

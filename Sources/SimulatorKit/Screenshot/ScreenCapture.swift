@@ -4,9 +4,20 @@ import ImageIO
 @preconcurrency import CoreImage
 
 /// Captures screenshots of the iOS Simulator.
-/// - `captureSimulator`: IOSurface framebuffer → downscale to iOS points (coordinate-aligned)
-/// - `captureToFile`: fast window capture via CGWindowListCreateImage (no coordinate alignment needed)
+/// - `captureSimulator`: IOSurface framebuffer → downscale to iOS points, returns JPEG base64 (coordinate-aligned).
+/// - `captureToFile`: legacy window capture via CGWindowListCreateImage (requires visible Simulator window).
+/// - `captureSnapPoints`: IOSurface framebuffer → downscale to iOS points, file or base64. Works when Simulator.app is hidden.
+/// - `captureSnapPixels`: IOSurface framebuffer at native device pixels, file or base64. Works when Simulator.app is hidden.
 public enum ScreenCapture {
+
+    /// Result of a snap capture: either an on-disk path or base64 image data, plus dimensions.
+    /// Base64 data (when present) is always JPEG — see `captureSnapPoints` / `captureSnapPixels`.
+    public struct SnapResult: Sendable {
+        public let path: String?
+        public let base64: String?
+        public let width: Int
+        public let height: Int
+    }
 
     private static func log(_ message: String) {
         logDiagnostic(message, prefix: "ScreenCapture")
@@ -43,6 +54,52 @@ public enum ScreenCapture {
         CIContext(options: [.useSoftwareRenderer: false])
     }()
 
+    /// Captures the device framebuffer as a CGImage at native device pixel resolution.
+    /// Tries IOSurface (fast private API) first; falls back to `simctl io screenshot` (TIFF).
+    /// Both sources bypass the macOS Window Server and work when Simulator.app is hidden.
+    /// On total failure the thrown error aggregates both underlying reasons.
+    private static func captureFramebufferCGImage(udid: String) throws -> CGImage {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let bridge = PrivateFrameworkBridge.shared
+        let device = try bridge.lookUpDevice(udid: udid)
+
+        var ioSurfaceError: String?
+
+        // Try IOSurface fast path first
+        do {
+            let result = try bridge.captureFramebufferIOSurface(device: device)
+            let t1 = CFAbsoluteTimeGetCurrent()
+            log("IOSurface capture: \(Int((t1 - t0) * 1000))ms (\(result.width)x\(result.height))")
+            return result
+        } catch {
+            let t1 = CFAbsoluteTimeGetCurrent()
+            ioSurfaceError = error.localizedDescription
+            log("IOSurface failed (\(Int((t1 - t0) * 1000))ms): \(error.localizedDescription)")
+        }
+
+        // simctl fallback — also goes through the framebuffer, not the Window Server
+        let tSimctl0 = CFAbsoluteTimeGetCurrent()
+        let imageData: Data
+        do {
+            imageData = try captureFramebufferSimctl(udid: udid)
+        } catch {
+            let reasons = [ioSurfaceError.map { "IOSurface: \($0)" }, "simctl: \(error.localizedDescription)"]
+                .compactMap { $0 }
+                .joined(separator: "; ")
+            throw CaptureError.framebufferCaptureFailed(reasons)
+        }
+        let tSimctl1 = CFAbsoluteTimeGetCurrent()
+        log("simctl capture: \(Int((tSimctl1 - tSimctl0) * 1000))ms (\(imageData.count) bytes)")
+
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw CaptureError.framebufferCaptureFailed("Failed to decode simctl image data")
+        }
+        let tDecode = CFAbsoluteTimeGetCurrent()
+        log("decode: \(Int((tDecode - tSimctl1) * 1000))ms (\(decoded.width)x\(decoded.height))")
+        return decoded
+    }
+
     /// Captures the simulator screen as a JPEG and returns base64-encoded data.
     /// Uses direct IOSurface access for speed (~3ms vs ~200ms simctl), falling back
     /// to simctl pipe if IOSurface is unavailable. Downscales to iOS point dimensions
@@ -50,47 +107,8 @@ public enum ScreenCapture {
     public static func captureSimulator(udid: String, screenScale: Float, timeout: Duration = .seconds(5)) throws -> (base64: String, width: Int, height: Int) {
         let t0 = CFAbsoluteTimeGetCurrent()
 
-        let bridge = PrivateFrameworkBridge.shared
-        let device = try bridge.lookUpDevice(udid: udid)
-
-        // Compute target dimensions
         let scale = Double(screenScale)
-
-        // Try IOSurface fast path first
-        var cgImage: CGImage?
-        do {
-            let result = try bridge.captureFramebufferIOSurface(device: device)
-            let t1 = CFAbsoluteTimeGetCurrent()
-            log("IOSurface capture: \(Int((t1 - t0) * 1000))ms (\(result.width)x\(result.height))")
-
-            // If we got back an IOSurface-backed CGImage, use CIImage(ioSurface:) for zero-copy
-            // Otherwise fall through to CGImage path
-            cgImage = result
-        } catch {
-            let t1 = CFAbsoluteTimeGetCurrent()
-            log("IOSurface failed (\(Int((t1 - t0) * 1000))ms): \(error.localizedDescription)")
-        }
-
-        // Simctl fallback
-        if cgImage == nil {
-            let tSimctl0 = CFAbsoluteTimeGetCurrent()
-            let imageData = try captureFramebufferSimctl(udid: udid)
-            let tSimctl1 = CFAbsoluteTimeGetCurrent()
-            log("simctl capture: \(Int((tSimctl1 - tSimctl0) * 1000))ms (\(imageData.count) bytes)")
-
-            // Decode with CGImageSource (format-agnostic: handles PNG, TIFF, etc.)
-            guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
-                  let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-                throw CaptureError.framebufferCaptureFailed("Failed to decode simctl image data")
-            }
-            let tDecode = CFAbsoluteTimeGetCurrent()
-            log("decode: \(Int((tDecode - tSimctl1) * 1000))ms (\(decoded.width)x\(decoded.height))")
-            cgImage = decoded
-        }
-
-        guard let sourceImage = cgImage else {
-            throw CaptureError.framebufferCaptureFailed("No image captured")
-        }
+        let sourceImage = try captureFramebufferCGImage(udid: udid)
 
         // Downscale from device pixels to iOS points + encode JPEG using CIContext
         let targetWidth = Int(round(Double(sourceImage.width) / scale))
@@ -157,6 +175,131 @@ public enum ScreenCapture {
 
         try (mutableData as Data).write(to: url)
         log("Screenshot saved to \(outputPath) (\(mutableData.length) bytes)")
+    }
+
+    // MARK: - Snap (framebuffer-based file/base64 capture)
+
+    /// Captures the simulator framebuffer at iOS point dimensions (1 px = 1 point).
+    /// Output is coordinate-aligned with `tap` / `describe`. Works when Simulator.app is hidden.
+    /// - If `outputPath` is nil, returns base64 JPEG data (and the written path is nil).
+    /// - If `outputPath` is set, writes the file in the given format and returns path only.
+    public static func captureSnapPoints(
+        udid: String,
+        screenScale: Float,
+        outputPath: String?,
+        format: String
+    ) throws -> SnapResult {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let scale = Double(screenScale)
+        let sourceImage = try captureFramebufferCGImage(udid: udid)
+
+        let targetWidth = Int(round(Double(sourceImage.width) / scale))
+        let targetHeight = Int(round(Double(sourceImage.height) / scale))
+        let targetRect = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+
+        let scaleX = CGFloat(targetWidth) / CGFloat(sourceImage.width)
+        let scaleY = CGFloat(targetHeight) / CGFloat(sourceImage.height)
+        let scaled = CIImage(cgImage: sourceImage).transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+        let result = try encodeScaled(ciImage: scaled, extent: targetRect, width: targetWidth, height: targetHeight, outputPath: outputPath, format: format)
+        log("snap-points total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms (\(targetWidth)x\(targetHeight))")
+        return result
+    }
+
+    /// Captures the simulator framebuffer at native device pixel dimensions (no downscale).
+    /// Works when Simulator.app is hidden.
+    /// - If `outputPath` is nil, returns base64 JPEG data (and the written path is nil).
+    /// - If `outputPath` is set, writes the file in the given format and returns path only.
+    public static func captureSnapPixels(
+        udid: String,
+        outputPath: String?,
+        format: String
+    ) throws -> SnapResult {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let sourceImage = try captureFramebufferCGImage(udid: udid)
+        let width = sourceImage.width
+        let height = sourceImage.height
+
+        if let outputPath = outputPath, format.lowercased() != "jpeg" && format.lowercased() != "jpg" {
+            // Direct CGImage → CGImageDestination path: no intermediate CIImage render.
+            try writeCGImageToFile(sourceImage, outputPath: outputPath, format: format)
+            log("snap-pixels total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms (\(width)x\(height))")
+            return SnapResult(path: outputPath, base64: nil, width: width, height: height)
+        }
+
+        // JPEG (to file or base64) → use CIContext for consistent quality with captureSimulator.
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        let ciImage = CIImage(cgImage: sourceImage)
+        let result = try encodeScaled(ciImage: ciImage, extent: rect, width: width, height: height, outputPath: outputPath, format: format)
+        log("snap-pixels total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms (\(width)x\(height))")
+        return result
+    }
+
+    /// Encodes a (possibly-scaled) CIImage either to a file or to base64 JPEG.
+    /// - For JPEG output (file or base64), uses CIContext.jpegRepresentation — the same fast path
+    ///   as `captureSimulator` (~3ms for the MCP case).
+    /// - For other formats, renders to a bitmap CGImage via CIContext then encodes via CGImageDestination.
+    private static func encodeScaled(
+        ciImage: CIImage,
+        extent: CGRect,
+        width: Int,
+        height: Int,
+        outputPath: String?,
+        format: String
+    ) throws -> SnapResult {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let normalized = format.lowercased()
+
+        // base64 path: always JPEG, matches captureSimulator's behavior.
+        if outputPath == nil {
+            guard let jpegData = ciContext.jpegRepresentation(
+                of: ciImage,
+                colorSpace: colorSpace,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.8]
+            ) else {
+                throw CaptureError.jpegEncodingFailed
+            }
+            return SnapResult(path: nil, base64: jpegData.base64EncodedString(), width: width, height: height)
+        }
+
+        let outputPath = outputPath!
+
+        if normalized == "jpeg" || normalized == "jpg" {
+            guard let jpegData = ciContext.jpegRepresentation(
+                of: ciImage,
+                colorSpace: colorSpace,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.9]
+            ) else {
+                throw CaptureError.jpegEncodingFailed
+            }
+            try jpegData.write(to: URL(fileURLWithPath: outputPath))
+            return SnapResult(path: outputPath, base64: nil, width: width, height: height)
+        }
+
+        // Render to a bitmap CGImage at the exact target dimensions, then encode with CGImageDestination.
+        guard let rendered = ciContext.createCGImage(ciImage, from: extent, format: .RGBA8, colorSpace: colorSpace) else {
+            throw CaptureError.framebufferCaptureFailed("Failed to render scaled image")
+        }
+        try writeCGImageToFile(rendered, outputPath: outputPath, format: format)
+        return SnapResult(path: outputPath, base64: nil, width: width, height: height)
+    }
+
+    private static func writeCGImageToFile(_ image: CGImage, outputPath: String, format: String) throws {
+        let uti = utiForFormat(format)
+        let mutableData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            mutableData as CFMutableData,
+            uti as CFString,
+            1,
+            nil
+        ) else {
+            throw CaptureError.jpegEncodingFailed
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw CaptureError.jpegEncodingFailed
+        }
+        try (mutableData as Data).write(to: URL(fileURLWithPath: outputPath))
     }
 
     // MARK: - Framebuffer Capture (simctl pipe fallback)
